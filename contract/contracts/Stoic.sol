@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
+//todo: automate the mint nft function
+//todo: autmoate stake disbursement when a lock function is available
+//todo: test set bounty and test bounty function
+
 contract Stoic {
     event userCreated(address indexed _userAddress, string _name);
     event taskCreated(
@@ -14,6 +18,17 @@ contract Stoic {
         uint indexed _stakedAmount,
         uint _completionTime
     );
+    event bountySet(
+        address indexed _createdBy,
+        uint indexed _id,
+        uint indexed _bountyAmount
+    );
+    event bountyClaimed(
+        address indexed _claimedBy,
+        uint indexed _id,
+        uint indexed _bountyAmount
+    );
+
     enum State {
         notStarted,
         inProgress,
@@ -55,13 +70,26 @@ contract Stoic {
     uint256 public numberOfBountiesCreated;
     uint256 public numberOfBountiesCompleted;
 
-    mapping(uint => Task) private allTasks;
-    mapping(address => Task) private userTasks;
-    mapping(address => User) private addressToUser;
+    mapping(uint => Task) public allTasks;
     mapping(uint => Task) private bounties;
+    mapping(address => User) private addressToUser;
+    mapping(address => bool) private isUser;
 
     constructor() {
         owner = msg.sender;
+    }
+
+    modifier taskExsists(uint _taskId) {
+        require(_taskId <= taskCounter, "This task does not exist");
+        _;
+    }
+
+    modifier onlyUsers() {
+        require(
+            isUser[msg.sender] == true,
+            "Only users can call this function"
+        );
+        _;
     }
 
     //? Internal functions
@@ -86,9 +114,45 @@ contract Stoic {
         return result;
     }
 
+    function checkLockPeriod(uint _taskId) internal view returns (bool) {
+        bool isLockExceeded;
+        Task storage task = returnTaskFromId(_taskId);
+        if (
+            (task.lockPeriod > 0 && block.timestamp >= task.unlockTime) ||
+            task.lockPeriod == 0
+        ) {
+            isLockExceeded = true;
+        }
+
+        return isLockExceeded;
+    }
+
+    function calculateBalance(
+        uint _taskId
+    ) internal view returns (uint _balance) {
+        Task storage task = returnTaskFromId(_taskId);
+        uint balance;
+
+        task.bountyStakeAmount > 0
+            ? balance = task.stakedAmount - task.bountyStakeAmount
+            : balance = task.stakedAmount;
+
+        return balance;
+    }
+
+    function checkDeadline(
+        uint _taskId
+    ) internal view returns (bool isExceeded) {
+        Task storage task = returnTaskFromId(_taskId);
+        block.timestamp > (task.timestamp + task.deadline)
+            ? isExceeded = true
+            : isExceeded = false;
+    }
+
     //? External & Public functions
     function createUser(string memory _name) external {
         usersCounter++;
+        isUser[msg.sender] = true;
         User memory user = User({
             Address: msg.sender,
             Name: _name,
@@ -105,24 +169,36 @@ contract Stoic {
 
     function createTask(
         string memory _description,
-        uint256 _amountToStake,
         uint256 _taskDeadline,
         uint256 _bountyStakeAmount,
         uint256 _lockPeriod
     ) external payable {
-        require(_amountToStake > 0, "Amount is too low for staking");
+        require(
+            isUser[msg.sender] == true,
+            "Only registered users can create tasks"
+        );
+        require(msg.value > 0, "Amount is too low for staking");
         taskCounter++;
+        uint newTaskDeadline = _taskDeadline + 0 seconds;
+        uint lockTime = _lockPeriod + 0 seconds;
+        uint256 newUnlockTime;
+        uint amountToStake = msg.value;
+
+        _lockPeriod > 0
+            ? newUnlockTime = block.timestamp + lockTime
+            : newUnlockTime = 0;
+
         Task memory newTask = Task({
             id: taskCounter,
             creatorAddress: msg.sender,
             taskDescription: convertStringToBytes(_description),
             state: State.inProgress,
-            stakedAmount: _amountToStake,
+            stakedAmount: amountToStake,
             timestamp: block.timestamp,
-            deadline: _taskDeadline,
+            deadline: newTaskDeadline,
             bountyStakeAmount: _bountyStakeAmount,
             lockPeriod: _lockPeriod,
-            unlockTime: block.timestamp + _lockPeriod,
+            unlockTime: newUnlockTime,
             isFundsReleased: false,
             isBountyIssued: _bountyStakeAmount > 0 ? true : false,
             isBountyClaimed: false,
@@ -136,20 +212,18 @@ contract Stoic {
         }
 
         //? send the stakedAmount to the contract
-        (bool sent, ) = payable(address(this)).call{value: _amountToStake}("");
+        (bool sent, ) = payable(address(this)).call{value: amountToStake}("");
         require(sent, "This transaction failed");
 
         allTasks[newTask.id] = newTask;
-        userTasks[msg.sender] = newTask;
 
-        emit taskCreated(msg.sender, newTask.id, _amountToStake);
+        emit taskCreated(msg.sender, newTask.id, amountToStake);
     }
 
     function completeTask(
         uint _taskId
-    ) external returns (string memory _message) {
+    ) external taskExsists(_taskId) returns (string memory _message) {
         completedTasksCounter++;
-        bool deadlineExceeded = false;
 
         Task storage task = returnTaskFromId(_taskId);
 
@@ -163,41 +237,82 @@ contract Stoic {
             "task has already been completed"
         );
 
-        if (block.timestamp > (task.timestamp + task.deadline)) {
-            deadlineExceeded = true;
-        }
-
         require(!task.isFundsReleased, "This task has been completed");
 
         task.state = State.completed;
         addressToUser[msg.sender].numberOfTasksCompleted++;
-
-        if (task.lockPeriod > 0) {
-            require(
-                block.timestamp >= task.unlockTime,
-                "amount staked is locked until unlock time is reached"
-            );
-        }
         uint256 amountToSend;
-        if (task.bountyStakeAmount > 0) {
-            amountToSend = task.stakedAmount - task.bountyStakeAmount;
-        } else {
-            amountToSend = task.stakedAmount;
-        }
 
-        if (deadlineExceeded) {
-            _message = "deadline exceeded, staked amount will be sent to a charity organization";
+        bool isLockExceeded = checkLockPeriod(_taskId);
+        bool isDeadlineExceeded = checkDeadline(_taskId);
+
+        if (isLockExceeded) {
+            amountToSend = calculateBalance(_taskId);
+            if (isDeadlineExceeded) {
+                _message = "Deadline Exceeded, funds sent to charity";
+            } else {
+                payable(msg.sender).transfer(amountToSend);
+            }
         } else {
-            (bool sent, ) = payable(msg.sender).call{value: amountToSend}("");
-            require(sent, "this transaction failed");
+            _message = "Funds are still locked";
         }
 
         emit taskCompleted(msg.sender, _taskId, amountToSend, block.timestamp);
     }
 
-    function setBounty() public {}
+    function setBounty(
+        uint256 _taskId
+    ) external payable taskExsists(_taskId) onlyUsers {
+        Task storage task = returnTaskFromId(_taskId);
+        require(msg.value > 0, "invalid bounty");
+        uint _bountyAmount = msg.value;
+        require(
+            task.state != State.completed,
+            "Can't set bounty on a completed task"
+        );
+        task.bountyStakeAmount += _bountyAmount;
+        task.isBountyIssued = true;
+        addressToUser[msg.sender].numberOfBountiesCreated++;
 
-    function claimBounty() external {}
+        (bool success, ) = payable(address(this)).call{value: _bountyAmount}(
+            ""
+        );
+        require(success, "This transaction failed");
 
-    function lockStake() external {}
+        emit bountySet(msg.sender, _taskId, _bountyAmount);
+    }
+
+    function claimBounty(uint _taskId) external taskExsists(_taskId) onlyUsers {
+        Task storage task = returnTaskFromId(_taskId);
+        require(
+            task.bountyStakeAmount > 0,
+            "There's no bounty available to claim"
+        );
+        require(!task.isBountyClaimed, "Bounty has already been claimed");
+        uint amount = task.bountyStakeAmount;
+
+        task.isBountyClaimed = true;
+        task.bountyClaimedBy = msg.sender;
+        addressToUser[msg.sender].numberOfBountiesCompleted++;
+
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "This transaction failed");
+
+        emit bountyClaimed(msg.sender, _taskId, amount);
+    }
+
+    function lockStake(uint _taskId, uint _time) external taskExsists(_taskId) {
+        Task storage task = returnTaskFromId(_taskId);
+
+        require(
+            msg.sender == task.creatorAddress,
+            "not the creator of this task"
+        );
+        require(task.lockPeriod == 0, "There's already a lock timer");
+        require(_time > 0, "time cannot be 0");
+        uint locktime = _time + 0 seconds;
+        task.lockPeriod = locktime;
+    }
+
+    receive() external payable {}
 }
