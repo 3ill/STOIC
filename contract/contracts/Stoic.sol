@@ -4,6 +4,7 @@ pragma solidity ^0.8.17;
 //todo: automate the mint nft function
 //todo: autmoate stake disbursement when a lock function is available
 //todo: test set bounty and test bounty function
+//todo: if there is some unclaimed bounty set in the task, send back to the creator when marked as completed
 
 contract Stoic {
     event userCreated(address indexed _userAddress, string _name);
@@ -117,11 +118,14 @@ contract Stoic {
     function checkLockPeriod(uint _taskId) internal view returns (bool) {
         bool isLockExceeded;
         Task storage task = returnTaskFromId(_taskId);
+
         if (
             (task.lockPeriod > 0 && block.timestamp >= task.unlockTime) ||
             task.lockPeriod == 0
         ) {
             isLockExceeded = true;
+        } else {
+            isLockExceeded = false;
         }
 
         return isLockExceeded;
@@ -151,6 +155,7 @@ contract Stoic {
 
     //? External & Public functions
     function createUser(string memory _name) external {
+        require(!isUser[msg.sender], "Already a user!");
         usersCounter++;
         isUser[msg.sender] = true;
         User memory user = User({
@@ -246,7 +251,7 @@ contract Stoic {
         bool isLockExceeded = checkLockPeriod(_taskId);
         bool isDeadlineExceeded = checkDeadline(_taskId);
 
-        if (isLockExceeded) {
+        if (isLockExceeded == true) {
             amountToSend = calculateBalance(_taskId);
             if (isDeadlineExceeded) {
                 _message = "Deadline Exceeded, funds sent to charity";
@@ -312,6 +317,22 @@ contract Stoic {
         require(_time > 0, "time cannot be 0");
         uint locktime = _time + 0 seconds;
         task.lockPeriod = locktime;
+        task.unlockTime = block.timestamp + locktime;
+        task.isFundsReleased = false;
+    }
+
+    function unlockFunds(uint _taskId) external taskExsists(_taskId) {
+        Task storage task = returnTaskFromId(_taskId);
+
+        require(
+            msg.sender == task.creatorAddress,
+            "not the creator of this task"
+        );
+        require(task.unlockTime <= block.timestamp, "Funds are still locked");
+        require(!task.isFundsReleased, "Funds already released");
+
+        task.isFundsReleased = true;
+        payable(msg.sender).transfer(calculateBalance(_taskId));
     }
 
     receive() external payable {}
