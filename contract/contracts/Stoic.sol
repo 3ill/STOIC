@@ -3,7 +3,6 @@ pragma solidity ^0.8.17;
 
 //todo: automate the mint nft function
 //todo: autmoate stake disbursement when a lock function is available
-//todo: test set bounty and test bounty function
 //todo: if there is some unclaimed bounty set in the task, send back to the creator when marked as completed
 
 contract Stoic {
@@ -93,7 +92,7 @@ contract Stoic {
         _;
     }
 
-    //? Internal functions
+    //! Internal functions
 
     function mintNFT() internal {}
 
@@ -153,7 +152,7 @@ contract Stoic {
             : isExceeded = false;
     }
 
-    //? External & Public functions
+    //! External & Public functions
     function createUser(string memory _name) external {
         require(!isUser[msg.sender], "Already a user!");
         usersCounter++;
