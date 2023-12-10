@@ -1,6 +1,6 @@
 # STOIC
 
-<p align="center"><a href="/" target="_blank"><img src="" width="500"></a></p>
+<p align="center"><a href="/" target="_blank"><img src="https://github.com/3ill/STOIC/blob/main/frontend/public/Images/monk.jpg" width="500"></a></p>
 
 STOIC is a transformative decentralized application (DApp) designed to empower individuals to overcome chronic procrastination and unlock their full potential for productivity. By leveraging the power of blockchain technology, STOIC introduces a unique ecosystem of features that incentivize task completion, foster accountability, and reward consistent effort.
 
