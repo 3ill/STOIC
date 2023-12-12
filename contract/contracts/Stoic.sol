@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
+import {StoicNftInterface} from "./StoicNftInterface.sol";
 
 //todo: automate the mint nft function
 //todo: autmoate stake disbursement when a lock function is available
@@ -27,6 +28,10 @@ contract Stoic {
         address indexed _claimedBy,
         uint indexed _id,
         uint indexed _bountyAmount
+    );
+    event badgeAwarded(
+        address indexed _awardedTo,
+        uint indexed _numberOfTasksCompleted
     );
 
     enum State {
@@ -63,6 +68,7 @@ contract Stoic {
     }
 
     address private immutable owner;
+    StoicNftInterface private StoicNFT;
 
     uint256 public usersCounter;
     uint256 public taskCounter;
@@ -75,8 +81,9 @@ contract Stoic {
     mapping(address => User) private addressToUser;
     mapping(address => bool) private isUser;
 
-    constructor() {
+    constructor(address _stoicNftAddress) {
         owner = msg.sender;
+        StoicNFT = StoicNftInterface(_stoicNftAddress);
     }
 
     modifier taskExsists(uint _taskId) {
@@ -94,7 +101,16 @@ contract Stoic {
 
     //! Internal functions
 
-    function mintNFT() internal {}
+    function mintNFT(address _to) internal {
+        require(isUser[_to], "This user does not exsist");
+        require(
+            addressToUser[_to].numberOfTasksCompleted >= 10,
+            "Not enough tasks to award a badge"
+        );
+        StoicNFT.safeMint(_to);
+
+        emit badgeAwarded(_to, addressToUser[_to].numberOfTasksCompleted);
+    }
 
     function returnTaskFromId(
         uint _taskId
@@ -284,6 +300,13 @@ contract Stoic {
         require(success, "This transaction failed");
 
         emit bountySet(msg.sender, _taskId, _bountyAmount);
+    }
+
+    function checkNumberOfBadgesAwarded(
+        address _address
+    ) external view returns (uint _numberOfBadges) {
+        require(isUser[_address], "Not a valid user");
+        _numberOfBadges = StoicNFT.balanceOf(_address);
     }
 
     function claimBounty(uint _taskId) external taskExsists(_taskId) onlyUsers {
